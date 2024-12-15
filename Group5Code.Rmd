@@ -1,0 +1,319 @@
+---
+title: "Group5Code"
+author: "Lejun Ge"
+date: "2024-12-09"
+output: html_document
+---
+
+
+```{r 1.Data preparation, include=FALSE}
+library("NHANES")
+data(NHANES)
+library(car) #VIF, avPlots
+library(olsrr) #backward selection
+library(magrittr) #%>%
+library(ggplot2)
+library(gridExtra)
+
+var= c("DirectChol","Age","Gender","Race1","BMI","BPSysAve","BPDiaAve",
+       "Diabetes","SleepTrouble","Testosterone","Depressed","PhysActive",
+       "Marijuana","HardDrugs","Alcohol12PlusYr","Smoke100")
+data <- NHANES[,var]
+ID <- seq(nrow(data))
+data <- cbind(ID,data)
+data$PulsePressure <- data$BPSysAve-data$BPDiaAve
+
+#Divided age into groups.
+quantile(data$Age)
+data$Age_Group = 0
+data$Age_Group[data$Age > 30 & data$Age <= 40] = 1
+data$Age_Group[data$Age > 40 & data$Age <= 50] = 2
+data$Age_Group[data$Age > 50] = 3
+
+table(data$Age_Group)
+
+#Divided Race into Black and Non-black
+data$Race = 0
+data$Race[data$Race1 == "Black"] = 1
+table(data$Race)
+
+#Center the continuous variables
+BMI_Center <- scale(data$BMI, center = T, scale = F)
+Testosterone_Center <- scale(data$Testosterone, center = T, scale = F)
+PulsePressure_Center <- scale(data$PulsePressure, center = T, scale = F)
+data <- cbind(data, BMI_Center, Testosterone_Center, PulsePressure_Center)
+
+#Set categorical variables as factor
+data$Race1 <- as.factor(data$Race1)
+data$Race <- as.factor(data$Race)
+levels(data$Race) <- c("Non-black", "Black")
+data$Depressed <- as.factor(data$Depressed)
+data$Age_Group <- as.factor(data$Age_Group)
+levels(data$Age_Group) <- c("20-30", "30-40", "40-50", "50-60")
+data$Diabetes <- as.factor(data$Diabetes)
+#Delete the missing value
+data <- na.omit(data)
+```
+
+
+
+```{r 2.Descriptive analysis, echo=TRUE}
+#Descriptive Table
+mean(data$DirectChol);sd(data$DirectChol)
+mean(data$BMI);sd(data$BMI)
+mean(data$Age);sd(data$Age)
+
+data$Low_HDL = 0
+data$Low_HDL[data$DirectChol < 1] = 1
+table(data$Low_HDL)
+
+Normal <- data[which(data$Low_HDL == 0),]
+At_risk <- data[which(data$Low_HDL == 1),]
+
+chisq.test(table(data$Age_Group,data$Low_HDL))$p.value
+chisq.test(table(data$Gender,data$Low_HDL))$p.value
+chisq.test(table(data$Race,data$Low_HDL))$p.value
+t.test(Normal$BMI, At_risk$BMI)$p.value
+t.test(Normal$PulsePressure, At_risk$PulsePressure)$p.value
+chisq.test(table(data$Diabetes,data$Low_HDL))$p.value
+chisq.test(table(data$SleepTrouble,data$Low_HDL))$p.value
+t.test(Normal$Testosterone, At_risk$Testosterone)$p.value
+chisq.test(table(data$Depressed,data$Low_HDL))$p.value
+chisq.test(table(data$PhysActive,data$Low_HDL))$p.value
+chisq.test(table(data$Marijuana,data$Low_HDL))$p.value
+chisq.test(table(data$HardDrugs,data$Low_HDL))$p.value
+chisq.test(table(data$Alcohol12PlusYr,data$Low_HDL))$p.value
+chisq.test(table(data$Smoke100,data$Low_HDL))$p.value
+
+mean(Normal$BMI);sd(Normal$BMI)
+mean(At_risk$BMI);sd(At_risk$BMI)
+
+mean(Normal$PulsePressure);sd(Normal$PulsePressure)
+mean(At_risk$PulsePressure);sd(At_risk$PulsePressure)
+
+mean(Normal$Testosterone);sd(Normal$Testosterone)
+mean(At_risk$Testosterone);sd(At_risk$Testosterone)
+
+#Interaction plot[By Age]
+P1 <- ggplot(data, aes(x = BMI, y = DirectChol, color = Age_Group)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = F, size = 1) +
+  labs(
+    title = "BMI vs DirectChol by Age",
+    x = "BMI",
+    y = "DirectChol",
+    color = "Age Group"
+  ) + theme_minimal(base_size = 14)
+#No interaction effect
+
+#Interaction plot[By Gender]
+P2 <- ggplot(data, aes(x = BMI, y = DirectChol, color = Gender)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = F, size = 1) +
+  labs(
+    title = "BMI vs DirectChol by Gender",
+    x = "BMI",
+    y = "DirectChol",
+    color = "Gender"
+  ) + theme_minimal(base_size = 14)
+#No interaction effect
+
+#Interaction plot[By Race]
+P3 <- ggplot(data, aes(x = BMI, y = DirectChol, color = Race)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = F, size = 1) +
+  labs(
+    title = "BMI vs DirectChol by Race",
+    x = "BMI",
+    y = "DirectChol",
+    color = "Race"
+  ) + theme_minimal(base_size = 14)
+#Have interaction effect
+
+#Interaction plot[By Diabetes]
+P4 <- ggplot(data, aes(x = BMI, y = DirectChol, color = Diabetes)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = F, size = 1) +
+  labs(
+    title = "BMI vs DirectChol by Diabetes",
+    x = "BMI",
+    y = "DirectChol",
+    color = "Diabetes"
+  ) + theme_minimal(base_size = 14)
+#Have interaction effect
+grid.arrange(P1, P2, P3, P4, nrow = 2, ncol = 2)
+```
+
+```{r 3.Model selection, echo=TRUE}
+#Fit initial model
+fit <- lm(DirectChol ~ Age_Group + Gender + Race + BMI_Center + PulsePressure_Center + 
+            Diabetes + SleepTrouble + Testosterone_Center + Depressed + PhysActive + 
+            Marijuana + HardDrugs + Alcohol12PlusYr + Smoke100 + Race*BMI_Center + 
+            Diabetes*BMI_Center, data = data)
+
+summary(fit)
+
+#Backward Model selection with P = 0.1
+model_1 <- ols_step_backward_p(fit, penter=0.1, details = F, 
+                               include = c("Age_Group","Gender","Race"))$model
+summary(model_1)
+```
+
+```{r 4.Model Diagnostics, echo=TRUE}
+#Partial Regression Plots (Checking for linearity)
+avPlots(model_1)
+#Good.
+
+#Durbin-Watson Test (Checking for independence)
+durbinWatsonTest(model_1)
+#Violated, but we haven't learn how to correct.
+
+#Plot Residuals vs Fitted values (Checking for constant variance)
+plot(model_1,which = 1)
+#Violated, using sqrt(Y) to fit the second model
+data$Sqrt_DirectChol <- sqrt(data$DirectChol)
+
+model_2 <- lm(Sqrt_DirectChol ~ Age_Group + Gender + Race + BMI_Center + PulsePressure_Center + 
+                Diabetes + Testosterone_Center + Depressed + PhysActive + Alcohol12PlusYr + 
+                Smoke100 + Race*BMI_Center, data = data)
+summary(model_2)
+#Plot Residuals vs Fitted values again
+plot(model_2,which = 1)
+
+#Plot Histogram of Residuals and Q-Q Plot(Checking for normality)
+hist(model_2$residuals, main = "Histogram of Residuals" , xlab = "Residuals")
+qqPlot(resid(model_2), main = "QQ-Plot")
+#Good overall.
+```
+
+```{r 5.Influence Diagnostics, echo=TRUE}
+#Plot Cook’s distance (Checking for influential points)
+plot(model_2,which = 4); abline(h = 4/nrow(data),lty = 2, col = "red")
+
+#Locate outliers
+influence <- data.frame(Residual = resid(model_2), 
+                        Int_student = rstandard(model_2), 
+                        Ext_student = rstudent(model_2), 
+                        HatDiagH = hat(model.matrix(model_2)), 
+                        covRatio = covratio(model_2), 
+                        DFFITS = dffits(model_2), 
+                        CooksDistance = cooks.distance(model_2))
+influence[order(abs(influence$CooksDistance),decreasing = T),] %>% head(15)
+
+#Delete outliers from the data set
+data <- data[-which(data$ID == 6661 | data$ID == 7040 | data$ID == 8517 |
+                      data$ID == 8796 | data$ID == 9169 | data$ID == 9170),]
+```
+
+```{r 6.Final Model, echo=TRUE}
+#Fit the Final Model
+model_3 <- lm(Sqrt_DirectChol ~ Age_Group + Gender + Race + BMI_Center + PulsePressure_Center +
+                Diabetes + Testosterone_Center + Depressed + PhysActive + Alcohol12PlusYr +
+                Smoke100 + Race*BMI_Center, data = data)
+#Coefficient
+summary(model_3)
+#Testing for collinearity
+vif(model_3)
+#Compute 95% Confidence Interval
+confint(model_3)
+
+##Coefficient Plot##
+variables <- c("AgeGroup_30-40", "AgeGroup_40-50", "AgeGroup_50-60", "Gender", 
+               "Race", "BMI_Center", "PulsePressure_Center", "Diabetes", 
+               "Testosterone_Center", "Depressed_Several", "Depressed_Most", 
+               "Physical Activity", "Alcohol","Smoke", "Race*BMI_Center")
+#Create plot data
+plot_data <- data.frame(Variables <- variables, 
+                        Coefficients <- as.vector(model_3$coefficients[-1]), 
+                        Lower <- as.vector(confint(model_3)[-1,1]),
+                        Upper <- as.vector(confint(model_3)[-1,2])
+)
+ggplot(plot_data, aes(x = Coefficients, y = Variables)) +
+  geom_point(color = "blue", size = 2) + 
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper), 
+                 height = 0.5, color = "black") +
+  geom_vline(xintercept = 0, color = "red", lwd = 0.7, linetype = "dashed") +
+  labs(
+    title = "Coefficient Plot: Impact of Predictors on Sqrt_DirectChol",
+    x = "Standardized Coefficients",
+    y = "Variables"
+  ) +
+  theme_minimal(base_size = 14)
+```
+
+```{r 7.Result, echo=TRUE}
+model_black <- lm(Sqrt_DirectChol ~ Age_Group + Gender + BMI_Center + PulsePressure_Center +
+                    Diabetes + Testosterone_Center + Depressed + PhysActive + Alcohol12PlusYr +
+                    Smoke100, data = subset(data, Race == "Black"))
+
+model_non_black <- lm(Sqrt_DirectChol ~ Age_Group + Gender + BMI_Center + PulsePressure_Center +
+                        Diabetes + Testosterone_Center + Depressed + PhysActive + Alcohol12PlusYr +
+                        Smoke100, data = subset(data, Race == "Non-black"))
+summary(model_black)
+summary(model_non_black)
+
+ggplot(data, aes(x = BMI_Center, y = Sqrt_DirectChol, color = Race)) +
+  geom_smooth(method = "lm", formula = y ~ x, se = TRUE) +
+  labs(
+    x = "Centered BMI",
+    y = "Sqrt_DirectChol",
+    color = "Race"
+  ) +
+  theme_minimal(base_size = 14)
+
+
+
+model_no_interaction <- lm(Sqrt_DirectChol ~ Age_Group + Gender + Race + BMI_Center +
+                             PulsePressure_Center + Diabetes + Testosterone_Center +
+                             Depressed + PhysActive + Alcohol12PlusYr + Smoke100, data = data)
+
+model_with_interaction <- lm(Sqrt_DirectChol ~ Age_Group + Gender + Race + BMI_Center +
+                               PulsePressure_Center + Diabetes + Testosterone_Center +
+                               Depressed + PhysActive + Alcohol12PlusYr + Smoke100 +
+                               Race * BMI_Center, data = data)
+anova(model_no_interaction, model_with_interaction)
+
+
+
+predict_data <- data.frame(
+  BMI_Center = seq(min(data$BMI_Center), max(data$BMI_Center), length.out = 100),
+  Race = rep(c("Black", "Non-black"), each = 100),
+  Age_Group = "40-50", 
+  Gender = "female",  
+  PulsePressure_Center = 0, 
+  Diabetes = "No",
+  Testosterone_Center = 0,
+  Depressed = "None",
+  PhysActive = "Yes",
+  Alcohol12PlusYr = "Yes",
+  Smoke100 = "No"
+)
+
+
+predict_data$Sqrt_DirectChol <- predict(model_3, newdata = predict_data)
+
+
+ggplot(predict_data, aes(x = BMI_Center, y = Sqrt_DirectChol, color = Race)) +
+  geom_line(size = 1) +
+  labs(
+    title = "Predicted Effect of BMI on Sqrt_DirectChol by Race",
+    x = "Centered BMI",
+    y = "Predicted Sqrt_DirectChol",
+    color = "Race"
+  ) +
+  theme_minimal(base_size = 14)
+
+ggplot(data, aes(x = BMI_Center, y = Sqrt_DirectChol)) +
+  geom_point(alpha = 0.5, color = "blue") +
+  geom_smooth(method = "lm", formula = y ~ x, color = "red", se = TRUE) +
+  labs(
+    x = "Centered BMI",
+    y = "Sqrt_DirectChol"
+  ) +
+  theme_minimal(base_size = 14)
+
+library(car)
+
+# Ensure the model is already fitted
+# Assuming the model is stored in 'model_3'
+avPlots(model_3, terms = "BMI_Center", 
+        main = "Partial Regression Plot for BMI (Centered)", 
+        id.n = 3,  # Highlighting top 3 influential points
+        id.cex = 0.7)
+```
